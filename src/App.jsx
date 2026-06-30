@@ -234,13 +234,6 @@ function InventoryModal({item,onClose}) {
   return <Modal title={inv.title} onClose={onClose}><div style={{color:"#e2e8f0"}}>{inv.content}</div></Modal>;
 }
 
-// ── Touch-safe draggable item (for Server 08 and word scramble) ────────────
-function useTouchDrag({onDrop, onDropZone}) {
-  // Returns props to spread onto draggable elements and drop zones
-  // Uses pointer events which work on both mouse and touch
-  return { pointerEvents: true };
-}
-
 // ── Puzzle 01 ──────────────────────────────────────────────────────────────
 function PuzzleComputer({onClose}) {
   const {dispatch}=useGame();
@@ -473,30 +466,34 @@ function PuzzleSafe({onClose}) {
   );
 }
 
-// ── Touch-friendly drag item component ────────────────────────────────────
-function DraggableItem({item, onDrop, shaking}) {
-  const touchedRef = useRef(false);
-
-  function onTouchStart(e) {
-    e.preventDefault();
-    touchedRef.current = true;
-    onDrop(item.id);
-    // reset after a short delay so repeated taps still work
-    setTimeout(() => { touchedRef.current = false; }, 500);
-  }
-
-  function onClick(e) {
-    // suppress the synthetic click that fires after touchstart
-    if(touchedRef.current) { e.preventDefault(); return; }
-    onDrop(item.id);
-  }
-
+// ── Touch-safe draggable item ──────────────────────────────────────────────
+function DraggableItem({ item, onDrop, shaking, disabled }) {
   return (
     <button
-      onTouchStart={onTouchStart}
-      onClick={onClick}
-      className={shaking===item.id?"shake":""}
-      style={{padding:"10px 12px",borderRadius:6,background:shaking===item.id?"#3b0f0f":"#1e3a5f",border:`1px solid ${shaking===item.id?"#ef4444":"#3b82f6"}`,color:shaking===item.id?"#ef4444":"#e2e8f0",cursor:"pointer",fontSize:13,display:"flex",alignItems:"center",gap:6,transition:"background 0.2s,border-color 0.2s,color 0.2s",minHeight:44,userSelect:"none",WebkitUserSelect:"none",touchAction:"none"}}>
+      onTouchStart={(e) => {
+        if (disabled) return;
+        e.preventDefault();
+        onDrop(item.id, true);
+      }}
+      onClick={(e) => {
+        if (disabled) return;
+        onDrop(item.id, false);
+      }}
+      className={shaking === item.id ? "shake" : ""}
+      style={{
+        padding: "10px 12px", borderRadius: 6,
+        background: shaking === item.id ? "#3b0f0f" : "#1e3a5f",
+        border: `1px solid ${shaking === item.id ? "#ef4444" : "#3b82f6"}`,
+        color: shaking === item.id ? "#ef4444" : "#e2e8f0",
+        cursor: "pointer", fontSize: 13,
+        display: "flex", alignItems: "center", gap: 6,
+        transition: "background 0.2s,border-color 0.2s,color 0.2s",
+        minHeight: 44, userSelect: "none", WebkitUserSelect: "none",
+        touchAction: "none",
+        opacity: disabled ? 0.5 : 1,
+        pointerEvents: disabled ? "none" : "auto",
+      }}
+    >
       <span>{item.icon}</span>{item.label}
     </button>
   );
@@ -511,6 +508,8 @@ function PuzzleDoor({onClose}) {
   const [msg,setMsg]=useState("");
   const [tries,setTries]=useState(0);
   const [shaking,setShaking]=useState(null);
+  const [itemsBlocked,setItemsBlocked]=useState(false);
+  const cooldownRef=useRef(false);
   const terminalRef=useRef(null);
 
   const [allItems]=useState(()=>shuffleArray([
@@ -531,18 +530,40 @@ function PuzzleDoor({onClose}) {
   const remaining=allItems.filter(f=>!dropped.includes(f.id));
   const correctDropped=dropped.filter(id=>allItems.find(i=>i.id===id)?.digital);
   const allDigitalLoaded=digitalItems.every(d=>dropped.includes(d.id));
-  const binaryMap={text:"01010100 01000101 01011000 01010100",picture:"01110000 01101001 01111000 01100101",music:"10110100 00110010 10000001 00110100",video:"11001010 00110001 10111010 01000011",game:"01100111 01100001 01101101 01100101",email:"01100101 01101101 01100001 01101001"};
+  const binaryMap={
+    text:"01010100 01000101 01011000 01010100",
+    picture:"01110000 01101001 01111000 01100101",
+    music:"10110100 00110010 10000001 00110100",
+    video:"11001010 00110001 10111010 01000011",
+    game:"01100111 01100001 01101101 01100101",
+    email:"01100101 01101101 01100001 01101001",
+  };
 
   const triggerShake=id=>{setShaking(id);setTimeout(()=>setShaking(null),600);};
 
-  const drop=id=>{
-    const item=allItems.find(i=>i.id===id);if(!item)return;
-    if(!item.digital){triggerShake(id);setTerminalLog(l=>[...l,{id:Date.now(),text:`[${item.icon} ${item.label.toUpperCase()}] → ✗ This object is not digital.`,error:true}]);return;}
+  const drop=(id, fromTouch)=>{
+    if(cooldownRef.current) return;
+
+    const item=allItems.find(i=>i.id===id);
+    if(!item) return;
+
+    if(fromTouch){
+      cooldownRef.current=true;
+      setItemsBlocked(true);
+      setTimeout(()=>{
+        cooldownRef.current=false;
+        setItemsBlocked(false);
+      },400);
+    }
+
+    if(!item.digital){
+      triggerShake(id);
+      setTerminalLog(l=>[...l,{id:Date.now(),text:`[${item.icon} ${item.label.toUpperCase()}] → ✗ This object is not digital.`,error:true}]);
+      return;
+    }
     setTerminalLog(l=>[...l,{id:Date.now(),text:`[${item.icon} ${item.label.toUpperCase()}] → ${binaryMap[id]||""}`,error:false}]);
     setDropped(d=>[...d,id]);
   };
-
-  const handleItemInteraction = id => drop(id);
 
   const submit=()=>{
     if(allDigitalLoaded){dispatch({type:"COMPLETE_PUZZLE",puzzleId:"door",notification:`✓ Server 08 restored! You earned the letter ${letter}.`});}
@@ -558,7 +579,13 @@ function PuzzleDoor({onClose}) {
           <div style={{color:"#475569",fontSize:10,fontWeight:700,letterSpacing:1,marginBottom:8,fontFamily:"monospace"}}>ITEMS — tap to load</div>
           <div style={{display:"flex",gap:8,flexWrap:"wrap",minHeight:44}}>
             {remaining.map(f=>(
-              <DraggableItem key={f.id} item={f} onDrop={handleItemInteraction} shaking={shaking}/>
+              <DraggableItem
+                key={f.id}
+                item={f}
+                onDrop={drop}
+                shaking={shaking}
+                disabled={itemsBlocked}
+              />
             ))}
             {remaining.length===0&&<div style={{color:"#10b981",fontSize:13,padding:"4px 0"}}>All items loaded</div>}
           </div>
@@ -619,7 +646,6 @@ function ExitPasswordModal({onClose}) {
       <div style={{background:"#0f172a",borderRadius:8,padding:14,marginBottom:14}}>
         <p style={{color:"#94a3b8",fontSize:13,margin:"0 0 16px",lineHeight:1.6}}>Tap letters to place them. Tap a placed letter to return it.</p>
 
-        {/* Answer slots */}
         <div style={{marginBottom:16}}>
           <div style={{color:"#475569",fontSize:10,fontWeight:700,letterSpacing:1,marginBottom:8,fontFamily:"monospace"}}>YOUR ANSWER</div>
           <div style={{display:"flex",gap:8,justifyContent:"center",flexWrap:"wrap"}}>
@@ -635,7 +661,6 @@ function ExitPasswordModal({onClose}) {
           </div>
         </div>
 
-        {/* Tile tray */}
         <div style={{minHeight:60,padding:"10px 8px",background:"#060e1a",borderRadius:8,border:"1px solid #1e293b",display:"flex",gap:8,justifyContent:"center",flexWrap:"wrap",marginBottom:8}}>
           {available.length===0
             ?<div style={{color:"#1e3a5f",fontSize:12,fontFamily:"monospace",alignSelf:"center"}}>All letters placed</div>
@@ -788,7 +813,7 @@ function RoomScene({completedCount,roomObjects,onClickObject}) {
         {/* Desk */}
         <polygon points="80,600 820,600 780,390 120,390" fill="#050d1a" stroke="#0a1628" strokeWidth="1"/>
 
-        {/* Server hotspots — large touch targets */}
+        {/* Server hotspots */}
         {[{id:"computer",x:0,y:58,w:97,h:322},{id:"server",x:93,y:78,w:114,h:302},{id:"filing",x:205,y:98,w:92,h:262},{id:"archive",x:603,y:98,w:92,h:262},{id:"safe",x:693,y:78,w:114,h:302},{id:"door",x:803,y:58,w:97,h:322}].map(({id,x,y,w,h})=>(
           <g key={id}
             onClick={()=>onClickObject(id)}
@@ -858,7 +883,6 @@ function IntroScreen({onStart}) {
         <div style={{position:"absolute",bottom:0,left:"50%",transform:"translateX(-50%)",width:"60%",height:120,background:"radial-gradient(ellipse,rgba(34,211,238,0.15) 0%,transparent 70%)"}}/>
       </div>
 
-      {/* Corner widgets */}
       <div style={{position:"absolute",top:16,left:16,border:"1px solid #ef4444",borderRadius:4,padding:"6px 10px",background:"rgba(127,29,29,0.2)",display:"flex",alignItems:"center",gap:8}}>
         <div style={{width:14,height:14,borderRadius:"50%",border:"2px solid #ef4444",display:"flex",alignItems:"center",justifyContent:"center"}}><div style={{width:5,height:5,borderRadius:"50%",background:"#ef4444"}}/></div>
         <div style={{display:"flex",flexDirection:"column",gap:3}}>{[36,24,24].map((w,i)=><div key={i} style={{height:2,width:w,background:"#ef4444",borderRadius:1}}/>)}</div>
@@ -875,7 +899,6 @@ function IntroScreen({onStart}) {
         <div style={{display:"flex",flexDirection:"column",gap:3}}>{[28,20].map((w,i)=><div key={i} style={{height:2,width:w,background:"#22d3ee",borderRadius:1,opacity:0.7}}/>)}</div>
       </div>
 
-      {/* Main HUD frame */}
       <div style={{position:"relative",width:"min(600px,92%)",boxShadow:"0 0 30px rgba(34,211,238,0.35)"}}>
         <svg style={{position:"absolute",inset:0,width:"100%",height:"100%",pointerEvents:"none"}} viewBox="0 0 600 400" preserveAspectRatio="none">
           <path d="M22,0 L578,0 L600,22 L600,378 L578,400 L22,400 L0,378 L0,22 Z" fill="rgba(2,8,16,0.88)" stroke="#22d3ee" strokeWidth="1.5"/>
@@ -946,7 +969,6 @@ export default function App() {
         <IntroScreen onStart={()=>setStarted(true)}/>
       ) : (
         <div style={{position:"fixed",inset:0,background:"#040814",overflow:"hidden",fontFamily:"system-ui,sans-serif"}}>
-          {/* Full-width header */}
           <div style={{position:"absolute",top:0,left:0,right:0,height:44,background:"rgba(4,8,20,0.95)",borderBottom:"1px solid #0f2040",display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 16px",zIndex:150}}>
             <div style={{color:"#22d3ee",fontSize:"clamp(10px,2vw,13px)",fontWeight:700,letterSpacing:2}}>BINARY CODE ESCAPE</div>
             <div style={{display:"flex",gap:"clamp(8px,2vw,20px)",alignItems:"center"}}>
@@ -957,12 +979,10 @@ export default function App() {
             </div>
           </div>
 
-          {/* Room */}
           <div style={{position:"absolute",inset:0,paddingLeft:panelW,paddingTop:44,overflow:"hidden"}}>
             <RoomScene completedCount={completedCount} roomObjects={state.roomObjects} onClickObject={id=>dispatch({type:"OPEN_PUZZLE",puzzleId:id})}/>
           </div>
 
-          {/* Exit door tap overlay */}
           {completedCount>=6&&(
             <div onClick={()=>dispatch({type:"OPEN_PUZZLE",puzzleId:"__exit__"})}
               style={{position:"absolute",cursor:"pointer",zIndex:60,
